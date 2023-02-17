@@ -1789,7 +1789,7 @@ def show_last_exception() -> None:
         gef_print(f"   {RIGHT_ARROW}    {code}")
 
     gef_print(" Version ".center(80, HORIZONTAL_LINE))
-    gdb.execute("version full")
+    gdb.execute("_version full")
     gef_print(" Last 10 GDB commands ".center(80, HORIZONTAL_LINE))
     gdb.execute("show commands")
     gef_print(" Runtime environment ".center(80, HORIZONTAL_LINE))
@@ -3502,7 +3502,7 @@ def continue_handler(_: "gdb.Event") -> None:
 def hook_stop_handler(_: "gdb.StopEvent") -> None:
     """GDB event handler for stop cases."""
     reset_all_caches()
-    gdb.execute("context")
+    # gdb.execute("context")
     return
 
 
@@ -4885,7 +4885,7 @@ class PieRemoteCommand(GenericCommand):
 
     def do_invoke(self, argv: List[str]) -> None:
         try:
-            gdb.execute(f"gef-remote {' '.join(argv)}")
+            gdb.execute(f"_gef-remote {' '.join(argv)}")
         except gdb.error as e:
             err(e)
             return
@@ -4896,7 +4896,7 @@ class PieRemoteCommand(GenericCommand):
 
         for bp_ins in gef.session.pie_breakpoints.values():
             bp_ins.instantiate(base_address)
-        gdb.execute("context")
+        gdb.execute("_context")
         return
 
 
@@ -5431,13 +5431,13 @@ class PCustomCommand(GenericCommand):
     def do_invoke(self, *_: Any, **kwargs: Dict[str, Any]) -> None:
         args : argparse.Namespace = kwargs["arguments"]
         if not args.type:
-            gdb.execute("pcustom list")
+            gdb.execute("_pcustom list")
             return
 
         _, structname = self.explode_type(args.type)
 
         if not args.address:
-            gdb.execute(f"pcustom show {structname}")
+            gdb.execute(f"_pcustom show {structname}")
             return
 
         if not is_alive():
@@ -5965,7 +5965,7 @@ class RemoteCommand(GenericCommand):
         gef.session.remote = GefRemoteSessionManager(args.host, args.port, args.pid, qemu_binary)
         gef.session.remote_initializing = False
         reset_all_caches()
-        gdb.execute("context")
+        gdb.execute("_context")
         return
 
 
@@ -5975,7 +5975,7 @@ class NopCommand(GenericCommand):
     aware."""
 
     _cmdline_ = "nop"
-    _syntax_  = ("{_cmdline_} [LOCATION] [--nb NUM_BYTES]"
+    _syntax_  = (f"{_cmdline_} [LOCATION] [--nb NUM_BYTES]"
                  "\n\tLOCATION\taddress/symbol to patch"
                  "\t--nb NUM_BYTES\tInstead of writing one instruction, patch the specified number of bytes")
     _example_ = f"{_cmdline_} $pc"
@@ -6225,7 +6225,7 @@ class GlibcHeapBinsCommand(GenericCommand):
     def do_invoke(self, argv: List[str]) -> None:
         if not argv:
             for bin_t in self._bin_types_:
-                gdb.execute(f"heap bins {bin_t}")
+                gdb.execute(f"_heap bins {bin_t}")
             return
 
         bin_t = argv[0]
@@ -6233,7 +6233,7 @@ class GlibcHeapBinsCommand(GenericCommand):
             self.usage()
             return
 
-        gdb.execute(f"heap bins {bin_t}")
+        gdb.execute(f"_heap bins {bin_t}")
         return
 
     @staticmethod
@@ -7234,7 +7234,7 @@ class ContextCommand(GenericCommand):
         if self["show_registers_raw"] is False:
             regs = set(gef.arch.all_registers)
             printable_registers = " ".join(list(regs - ignored_registers))
-            gdb.execute(f"registers {printable_registers}")
+            gdb.execute(f"_registers {printable_registers}")
             return
 
         widest = l = max(map(len, gef.arch.all_registers))
@@ -7309,7 +7309,7 @@ class ContextCommand(GenericCommand):
                 mem = gef.memory.read(sp, 0x10 * nb_lines)
                 gef_print(hexdump(mem, base=sp))
             else:
-                gdb.execute(f"dereference -l {nb_lines:d} {sp:#x}")
+                gdb.execute(f"_dereference -l {nb_lines:d} {sp:#x}")
 
         except gdb.MemoryError:
             err("Cannot read memory from $SP (corrupted stack pointer?)")
@@ -7752,9 +7752,9 @@ class ContextCommand(GenericCommand):
             sz, fmt = opt[0:2]
             self.context_title(f"memory:{address:#x}")
             if fmt == "pointers":
-                gdb.execute(f"dereference -l {sz:d} {address:#x}")
+                gdb.execute(f"_dereference -l {sz:d} {address:#x}")
             else:
-                gdb.execute(f"hexdump {fmt} -s {sz:d} {address:#x}")
+                gdb.execute(f"_hexdump {fmt} -s {sz:d} {address:#x}")
 
     @classmethod
     def update_registers(cls, _) -> None:
@@ -10420,7 +10420,10 @@ class GefSettingsManager(dict):
     For instance, to read a specific command setting: `gef.config[mycommand.mysetting]`
     """
     def __getitem__(self, name: str) -> Any:
-        setting : GefSetting = super().__getitem__(name)
+        try:
+            setting : GefSetting = super().__getitem__(name)
+        except KeyError:
+            setting : GefSetting = super().__getitem__("_" + name)
         self.__invoke_read_hooks(setting)
         return setting.value
 
@@ -10876,8 +10879,23 @@ class Gef:
             mgr.reset_caches()
         return
 
+o = None
 
-if __name__ == "__main__":
+for o in locals().values():
+    if isinstance(o, type) and issubclass(o, GenericCommand):
+        if hasattr(o, "_cmdline_") and isinstance(o._cmdline_, str):
+            if hasattr(o, "_syntax_") and o._syntax_:
+                o._syntax_ = o._syntax_.replace(o._cmdline_, "_" + o._cmdline_)
+            if hasattr(o, "_aliases_"):
+                o._aliases_ = ["_" + a for a in o._aliases_]
+            if hasattr(o, "_example_") and o._example_:
+                if isinstance(o._example_, str):
+                    o._example_ = o._example_.replace(o._cmdline_, "_" + o._cmdline_)
+                elif isinstance(o._example_, list):
+                    o._example_ = [e.replace(o._cmdline_, "_" + o._cmdline_) for e in o._example_]
+            o._cmdline_ = "_" + o._cmdline_
+
+def main() -> None:
     if sys.version_info[0] == 2:
         err("GEF has dropped Python2 support for GDB when it reached EOL on 2020/01/01.")
         err("If you require GEF for GDB+Python2, use https://github.com/hugsy/gef-legacy.")
@@ -10910,24 +10928,24 @@ if __name__ == "__main__":
             [PYTHONBIN, "-c", "import os, sys;print(os.linesep.join(sys.path).strip())"]).decode("utf-8").split()
         sys.path.extend(SITE_PACKAGES_DIRS)
 
-    # setup config
-    gdb_initial_settings = (
-        "set confirm off",
-        "set verbose off",
-        "set pagination off",
-        "set print elements 0",
-        "set history save on",
-        f"set history filename {os.getenv('GDBHISTFILE', '~/.gdb_history')}",
-        "set output-radix 0x10",
-        "set print pretty on",
-        "set disassembly-flavor intel",
-        "handle SIGALRM print nopass",
-    )
-    for cmd in gdb_initial_settings:
-        try:
-            gdb.execute(cmd)
-        except gdb.error:
-            pass
+    # # setup config
+    # gdb_initial_settings = (
+    #     "set confirm off",
+    #     "set verbose off",
+    #     "set pagination off",
+    #     "set print elements 0",
+    #     "set history save on",
+    #     f"set history filename {os.getenv('GDBHISTFILE', '~/.gdb_history')}",
+    #     "set output-radix 0x10",
+    #     "set print pretty on",
+    #     "set disassembly-flavor intel",
+    #     "handle SIGALRM print nopass",
+    # )
+    # for cmd in gdb_initial_settings:
+    #     try:
+    #         gdb.execute(cmd)
+    #     except gdb.error:
+    #         pass
 
     # load GEF, set up the managers and load the plugins, functions,
     reset()
@@ -10937,8 +10955,8 @@ if __name__ == "__main__":
     # load config
     gef.gdb.load_extra_plugins()
 
-    # setup gdb prompt
-    gdb.prompt_hook = __gef_prompt__
+    # # setup gdb prompt
+    # gdb.prompt_hook = __gef_prompt__
 
     # gdb events configuration
     gef_on_continue_hook(continue_handler)
@@ -10954,7 +10972,7 @@ if __name__ == "__main__":
 
     GefTmuxSetup()
 
-    # `target remote` commands cannot be disabled, so print a warning message instead
-    errmsg = "Using `target remote` with GEF does not work, use `gef-remote` instead. You've been warned."
-    gdb.execute(f"define target hook-remote\n pi if calling_function() != \"connect\": err(\"{errmsg}\") \nend")
-    gdb.execute(f"define target hook-extended-remote\n pi if calling_function() != \"connect\": err(\"{errmsg}\") \nend")
+    # # `target remote` commands cannot be disabled, so print a warning message instead
+    # errmsg = "Using `target remote` with GEF does not work, use `gef-remote` instead. You've been warned."
+    # gdb.execute(f"define target hook-remote\n pi if calling_function() != \"connect\": err(\"{errmsg}\") \nend")
+    # gdb.execute(f"define target hook-extended-remote\n pi if calling_function() != \"connect\": err(\"{errmsg}\") \nend")
